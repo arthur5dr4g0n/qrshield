@@ -9,12 +9,13 @@
    - Appels API (VirusTotal, urlscan) → réseau direct, jamais
      mis en cache (les rapports doivent être frais)
    ============================================================ */
-const CACHE = 'qrshield-v1';
+const CACHE = 'qrshield-v2';
 
 const SHELL = [
   './',
   './index.html',
   './manifest.json',
+  './js/jsQR.js',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
@@ -55,8 +56,7 @@ self.addEventListener('fetch', (e) => {
       fetch(e.request).then((res) => {
         // On met en cache au vol les ressources same-origin + polices
         if (res.ok && (url.origin === self.location.origin
-            || url.hostname.includes('fonts.g')
-            || url.hostname.includes('cdnjs'))) {
+            || url.hostname.includes('fonts.g'))) {
           const clone = res.clone();
           caches.open(CACHE).then((c) => c.put(e.request, clone));
         }
