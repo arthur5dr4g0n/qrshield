@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<!-- ============================================================
+     QRSHIELD — Analyseur de QR codes sécurisé (PWA single-file)
+     ------------------------------------------------------------
+     Image mentale : un videur de boîte de nuit pour tes QR codes.
+     Le QR code frappe à la porte → le videur (heuristiques) le
+     fouille → puis appelle deux experts (VirusTotal, urlscan.io)
+     → et c'est TOI qui décides s'il entre. Jamais d'ouverture auto.
+     ============================================================ -->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0a1a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>QRShield — Scanner QR sécurisé</title>
+
+<!-- PWA : manifest réel (fichier séparé = installation fiable) -->
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+
+<!-- Police : Atkinson Hyperlegible = lisibilité maximale (plein soleil, dyslexie) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- Bibliothèque de décodage QR : jsQR (locale au navigateur, rien n'est envoyé) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+
+<style>
+/* ============================================================
+   SECTION CSS — Dark mode, mobile-first, contraste élevé
+   ============================================================ */
+:root{
+  --bg:        #0d0a1a;   /* fond presque noir, teinte violette */
+  --surface:   #1a1430;   /* cartes */
+  --surface-2: #251c42;   /* éléments surélevés */
+  --violet:    #a78bfa;   /* accent principal */
+  --violet-dim:#6d5bb8;
+  --text:      #f2eefc;   /* texte quasi blanc = lisible au soleil */
+  --text-dim:  #b3a8d4;
+  --safe:      #2dd4a7;   /* vert verdict */
+  --warn:      #fbbf24;   /* orange verdict */
+  --danger:    #fb5e5e;   /* rouge verdict */
+  --mono: 'JetBrains Mono', monospace;
+  --radius: 14px;
+}
+*{ box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+html,body{ background:var(--bg); color:var(--text);
+  font-family:'Atkinson Hyperlegible', system-ui, sans-serif;
+  font-size:17px; line-height:1.55; min-height:100%; }
+body{ padding-bottom:env(safe-area-inset-bottom); }
+
+/* --- En-tête --- */
+header{ display:flex; align-items:center; justify-content:space-between;
+  padding:14px 18px; border-bottom:1px solid var(--surface-2);
+  position:sticky; top:0; background:var(--bg); z-index:10; }
+header h1{ font-size:1.25rem; letter-spacing:.5px; }
+header h1 span{ color:var(--violet); }
+.icon-btn{ background:var(--surface); border:1px solid var(--surface-2);
+  color:var(--text); border-radius:10px; padding:8px 12px; font-size:1.1rem;
+  cursor:pointer; min-height:44px; min-width:44px; }
+
+main{ max-width:560px; margin:0 auto; padding:18px; display:flex;
+  flex-direction:column; gap:18px; }
+
+/* --- Boutons --- */
+.btn{ display:block; width:100%; border:none; border-radius:var(--radius);
+  padding:16px; font-size:1.1rem; font-weight:700; cursor:pointer;
+  font-family:inherit; min-height:56px; transition:transform .08s; }
+.btn:active{ transform:scale(.98); }
+.btn-primary{ background:var(--violet); color:#14102a; }
+.btn-secondary{ background:var(--surface); color:var(--text);
+  border:1px solid var(--violet-dim); }
+.btn-danger{ background:transparent; color:var(--danger);
+  border:2px solid var(--danger); }
+.btn-danger.confirm{ background:var(--danger); color:#1a0505; }
+.btn:disabled{ opacity:.45; cursor:not-allowed; }
+
+/* --- Zone caméra --- */
+#cameraBox{ display:none; position:relative; border-radius:var(--radius);
+  overflow:hidden; background:#000; aspect-ratio:1/1; }
+#cameraBox.active{ display:block; }
+#video{ width:100%; height:100%; object-fit:cover; }
+/* Viseur : le "cadre de visée" au centre */
+#cameraBox::after{ content:''; position:absolute; inset:18%;
+  border:3px solid var(--violet); border-radius:18px; pointer-events:none;
+  box-shadow:0 0 0 999px rgba(13,10,26,.45); }
+#stopCam{ position:absolute; bottom:12px; left:50%; transform:translateX(-50%);
+  width:auto; padding:10px 22px; z-index:2; }
+
+/* --- Cartes --- */
+.card{ background:var(--surface); border:1px solid var(--surface-2);
+  border-radius:var(--radius); padding:16px; }
+.card h2{ font-size:1rem; color:var(--violet); text-transform:uppercase;
+  letter-spacing:1px; margin-bottom:10px; }
+
+/* --- Verdict (l'élément signature : le feu tricolore géant) --- */
+#verdict{ text-align:center; padding:22px 16px; border-radius:var(--radius);
+  font-size:1.6rem; font-weight:700; letter-spacing:1px; border:2px solid; }
+#verdict.safe{ color:var(--safe); border-color:var(--safe); background:rgba(45,212,167,.08); }
+#verdict.warn{ color:var(--warn); border-color:var(--warn); background:rgba(251,191,36,.08); }
+#verdict.danger{ color:var(--danger); border-color:var(--danger); background:rgba(251,94,94,.08); }
+#verdict small{ display:block; font-size:.85rem; font-weight:400;
+  letter-spacing:0; color:var(--text-dim); margin-top:6px; }
+
+/* --- URL décodée --- */
+.url-box{ font-family:var(--mono); font-size:.9rem; word-break:break-all;
+  background:var(--bg); border:1px solid var(--surface-2); border-radius:10px;
+  padding:12px; color:var(--text); }
+
+/* --- Flags --- */
+.flag{ display:flex; gap:10px; padding:10px 0;
+  border-bottom:1px solid var(--surface-2); align-items:flex-start; }
+.flag:last-child{ border-bottom:none; }
+.flag .dot{ flex:0 0 12px; height:12px; border-radius:50%; margin-top:6px; }
+.flag.f-danger .dot{ background:var(--danger); }
+.flag.f-warn .dot{ background:var(--warn); }
+.flag.f-ok .dot{ background:var(--safe); }
+.flag b{ display:block; }
+.flag p{ font-size:.9rem; color:var(--text-dim); }
+
+/* --- Sections API --- */
+.api-status{ font-size:.9rem; color:var(--text-dim); }
+.api-status.loading::after{ content:''; display:inline-block; width:12px;
+  height:12px; margin-left:8px; border:2px solid var(--violet);
+  border-top-color:transparent; border-radius:50%; vertical-align:middle;
+  animation:spin .8s linear infinite; }
+@keyframes spin{ to{ transform:rotate(360deg); } }
+.vt-stats{ display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
+.vt-stat{ flex:1; min-width:80px; text-align:center; background:var(--bg);
+  border-radius:10px; padding:10px 6px; border:1px solid var(--surface-2); }
+.vt-stat b{ display:block; font-size:1.5rem; font-family:var(--mono); }
+.vt-stat span{ font-size:.75rem; color:var(--text-dim); }
+#screenshot{ width:100%; border-radius:10px; margin-top:10px;
+  border:1px solid var(--surface-2); }
+.domain-list{ font-family:var(--mono); font-size:.8rem; color:var(--text-dim);
+  margin-top:8px; max-height:140px; overflow:auto; }
+
+/* --- Historique --- */
+.hist-item{ display:flex; justify-content:space-between; gap:10px;
+  padding:10px 0; border-bottom:1px solid var(--surface-2);
+  font-size:.85rem; align-items:center; }
+.hist-item:last-child{ border-bottom:none; }
+.hist-item .u{ font-family:var(--mono); word-break:break-all; flex:1;
+  color:var(--text-dim); }
+.badge{ font-size:.7rem; font-weight:700; padding:3px 8px; border-radius:99px; }
+.badge.safe{ background:rgba(45,212,167,.15); color:var(--safe); }
+.badge.warn{ background:rgba(251,191,36,.15); color:var(--warn); }
+.badge.danger{ background:rgba(251,94,94,.15); color:var(--danger); }
+
+/* --- Modale réglages --- */
+dialog{ background:var(--surface); color:var(--text); border:1px solid var(--violet-dim);
+  border-radius:var(--radius); padding:20px; width:min(92vw,440px); margin:auto; }
+dialog::backdrop{ background:rgba(0,0,0,.7); }
+dialog label{ display:block; font-size:.9rem; margin:14px 0 4px; color:var(--text-dim); }
+dialog input{ width:100%; padding:12px; border-radius:10px; font-family:var(--mono);
+  border:1px solid var(--surface-2); background:var(--bg); color:var(--text);
+  font-size:.9rem; }
+dialog input:focus{ outline:2px solid var(--violet); }
+
+.hidden{ display:none !important; }
+:focus-visible{ outline:3px solid var(--violet); outline-offset:2px; }
+@media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>QR<span>Shield</span> 🛡️</h1>
+  <button class="icon-btn" id="openSettings" aria-label="Réglages des clés API">⚙️</button>
+</header>
+
+<main>
+  <!-- ===== ACTION PRINCIPALE : une seule chose à faire ===== -->
+  <button class="btn btn-primary" id="startCam">📷 Scanner un QR code</button>
+  <button class="btn btn-secondary" id="pickFile">🖼️ Choisir une image de la galerie</button>
+  <input type="file" id="fileInput" accept="image/*" class="hidden">
+
+  <!-- Zone caméra (cachée par défaut) -->
+  <div id="cameraBox">
+    <video id="video" playsinline muted></video>
+    <button class="btn btn-secondary" id="stopCam">✕ Arrêter</button>
+  </div>
+  <canvas id="canvas" class="hidden"></canvas>
+
+  <!-- ===== RAPPORT ===== -->
+  <div id="report" class="hidden">
+    <div id="verdict"></div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>URL décodée</h2>
+      <div class="url-box" id="decodedUrl"></div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>🔍 Analyse locale (instantanée)</h2>
+      <div id="flags"></div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>🧪 VirusTotal</h2>
+      <div class="api-status" id="vtStatus">Clé API non configurée — ouvre ⚙️ pour l'ajouter.</div>
+      <div id="vtResult"></div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h2>📸 urlscan.io</h2>
+      <div class="api-status" id="usStatus">Clé API non configurée — ouvre ⚙️ pour l'ajouter.</div>
+      <div id="usResult"></div>
+    </div>
+
+    <!-- Ouverture manuelle uniquement, double confirmation -->
+    <button class="btn btn-danger" id="openAnyway" style="margin-top:18px">
+      Ouvrir quand même cette URL
+    </button>
+  </div>
+
+  <!-- ===== HISTORIQUE ===== -->
+  <div class="card" id="historyCard">
+    <h2>🕘 Historique (10 derniers)</h2>
+    <div id="historyList"><p class="api-status">Aucun scan pour l'instant.</p></div>
+  </div>
+</main>
+
+<!-- ===== MODALE RÉGLAGES ===== -->
+<dialog id="settingsDialog">
+  <h2 style="color:var(--violet)">Clés API</h2>
+  <p class="api-status" style="margin-top:6px">
+    Stockées uniquement dans <b>localStorage</b> de ton navigateur.
+    Elles ne quittent jamais ton téléphone (sauf vers les API officielles).
+  </p>
+  <label for="vtKey">Clé VirusTotal (API v3)</label>
+  <input id="vtKey" type="password" autocomplete="off" placeholder="64 caractères hexadécimaux">
+  <label for="usKey">Clé urlscan.io</label>
+  <input id="usKey" type="password" autocomplete="off" placeholder="UUID urlscan.io">
+  <label for="proxyUrl">Proxy CORS VirusTotal (optionnel)</label>
+  <input id="proxyUrl" type="url" autocomplete="off"
+    placeholder="https://qrshield-proxy.toi.workers.dev">
+  <p class="api-status" style="margin-top:6px">
+    Sans proxy, le navigateur bloque les appels VirusTotal (CORS).
+    Déploie <b>worker/vt-proxy.js</b> sur Cloudflare (gratuit, 5 min)
+    et colle l'URL ici.
+  </p>
+  <div style="display:flex; gap:10px; margin-top:18px">
+    <button class="btn btn-primary" id="saveKeys">Enregistrer</button>
+    <button class="btn btn-secondary" id="closeSettings">Fermer</button>
+  </div>
+</dialog>
+
+<script>
+/* ============================================================
+   SECTION 0 — PWA : enregistrement du Service Worker
+   ------------------------------------------------------------
+   Le manifest et le SW sont maintenant de VRAIS fichiers
+   (manifest.json + sw.js) → installation sur écran d'accueil
+   et mode offline fonctionnent réellement.
+   Prérequis : la page doit être servie en HTTPS (GitHub Pages
+   le fait automatiquement) ou sur localhost.
+   ============================================================ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js')
+      .then(() => console.log('[PWA] Service Worker enregistré — mode offline actif'))
+      .catch(err => console.warn('[PWA] SW non enregistré :', err));
+  });
+}
+
+/* ============================================================
+   SECTION 1 — Références DOM & état global
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const video = $('video'), canvas = $('canvas');
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+let stream = null;        // flux caméra actif
+let scanning = false;     // boucle de scan en cours ?
+let currentUrl = null;    // URL du dernier QR décodé
+let confirmTimer = null;  // timer de la double confirmation
+
+/* ============================================================
+   SECTION 2 — CAMÉRA + boucle de décodage jsQR
+   ------------------------------------------------------------
+   Image mentale : la caméra prend des photos en rafale,
+   et jsQR regarde chaque photo en se demandant
+   "y a-t-il un QR code dedans ?". Dès qu'il en voit un → stop.
+   ============================================================ */
+$('startCam').addEventListener('click', startCamera);
+$('stopCam').addEventListener('click', stopCamera);
+
+async function startCamera(){
+  try {
+    // facingMode 'environment' = caméra arrière du téléphone
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width:{ideal:1280}, height:{ideal:1280} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    $('cameraBox').classList.add('active');
+    scanning = true;
+    requestAnimationFrame(scanLoop);
+  } catch (err) {
+    // Erreurs classiques : permission refusée, pas de caméra, pas de HTTPS
+    alert("Caméra inaccessible : " + err.name + "\n" +
+      "→ Vérifie la permission caméra.\n" +
+      "→ La page DOIT être servie en HTTPS (ou localhost).");
+  }
+}
+
+function stopCamera(){
+  scanning = false;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  $('cameraBox').classList.remove('active');
+}
+
+function scanLoop(){
+  if (!scanning) return;
+  if (video.readyState === video.HAVE_ENOUGH_DATA) {
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts:'dontInvert' });
+    if (code && code.data) {
+      stopCamera();
+      onQRDecoded(code.data);
+      return;
+    }
+  }
+  requestAnimationFrame(scanLoop);
+}
+
+/* ============================================================
+   SECTION 3 — Upload d'image depuis la galerie
+   ============================================================ */
+$('pickFile').addEventListener('click', () => $('fileInput').click());
+$('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width; canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(data.data, data.width, data.height);
+    URL.revokeObjectURL(img.src);
+    if (code && code.data) onQRDecoded(code.data);
+    else alert("Aucun QR code détecté dans cette image. Essaie une photo plus nette / cadrée.");
+  };
+  img.onerror = () => alert("Impossible de lire cette image.");
+  img.src = URL.createObjectURL(file);
+  e.target.value = ''; // permet de re-choisir le même fichier
+});
+
+/* ============================================================
+   SECTION 4 — QR décodé → lancement de l'analyse
+   ------------------------------------------------------------
+   RÈGLE D'OR : l'URL n'est JAMAIS ouverte. On l'affiche,
+   on l'analyse, et c'est l'humain qui décide.
+   ============================================================ */
+function onQRDecoded(raw){
+  currentUrl = raw.trim();
+  $('report').classList.remove('hidden');
+  $('decodedUrl').textContent = currentUrl;
+  resetOpenButton();
+  $('report').scrollIntoView({ behavior:'smooth' });
+
+  // 4a. Heuristiques locales (instantané)
+  const flags = analyzeLocally(currentUrl);
+  renderFlags(flags);
+
+  // Verdict provisoire basé sur le local (sera mis à jour par les API)
+  window._verdictState = { local: flags, vt: null, us: null };
+  renderVerdict();
+
+  // 4b + 4c. Analyses distantes en parallèle (si clés présentes)
+  runVirusTotal(currentUrl);
+  runUrlscan(currentUrl);
+
+  // Historique (verdict mis à jour à la fin si les API répondent)
+  saveToHistory(currentUrl, verdictLevel());
+}
+
+/* ============================================================
+   SECTION 5 — HEURISTIQUES LOCALES
+   ------------------------------------------------------------
+   Image mentale : le videur fouille les poches AVANT d'appeler
+   la police. Rapide, gratuit, sans réseau.
+   Chaque "flag" = { level: 'danger'|'warn'|'ok', titre, expl }
+   ============================================================ */
+
+// Raccourcisseurs d'URL connus : ils cachent la vraie destination
+const SHORTENERS = ['bit.ly','tinyurl.com','t.co','goo.gl','is.gd','buff.ly',
+  'ow.ly','rebrand.ly','cutt.ly','shorturl.at','rb.gy','t.ly','s.id',
+  'tiny.cc','lnkd.in','qrco.de','soo.gd','v.gd','clck.ru','urlz.fr'];
+
+// TLDs souvent gratuits → très utilisés par le phishing
+const SUSPICIOUS_TLDS = ['.xyz','.tk','.ml','.ga','.cf','.gq','.top','.click',
+  '.link','.zip','.mov','.country','.icu'];
+
+// Top 20 marques ciblées par le typosquatting
+const TOP_DOMAINS = ['google','youtube','facebook','instagram','whatsapp',
+  'twitter','amazon','paypal','apple','microsoft','netflix','linkedin',
+  'ebay','tiktok','snapchat','spotify','github','dropbox','adobe','outlook'];
+
+// Distance de Levenshtein : "combien de lettres faut-il changer
+// pour passer d'un mot à l'autre ?" (paypa1 → paypal = 1)
+function levenshtein(a, b){
+  const m = Array.from({length:a.length+1}, (_,i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) m[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++)
+      m[i][j] = Math.min(
+        m[i-1][j] + 1, m[i][j-1] + 1,
+        m[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return m[a.length][b.length];
+}
+
+function analyzeLocally(rawUrl){
+  const flags = [];
+  let u;
+
+  // Cas : ce n'est même pas une URL (texte, wifi, vcard…)
+  try { u = new URL(rawUrl); }
+  catch {
+    flags.push({ level:'warn', titre:'Contenu non-URL',
+      expl:"Ce QR ne contient pas une adresse web (peut-être du texte, un wifi, une vCard). Prudence quand même : ne tape jamais un contenu de QR dans un terminal." });
+    return flags;
+  }
+
+  const host = u.hostname.toLowerCase();
+
+  // 1. HTTP vs HTTPS — "carte postale vs enveloppe scellée"
+  if (u.protocol === 'http:') {
+    flags.push({ level:'danger', titre:'Connexion non chiffrée (HTTP)',
+      expl:"Tout ce que tu enverras sur ce site circule en clair, comme une carte postale que tout le monde peut lire." });
+  } else if (u.protocol === 'https:') {
+    flags.push({ level:'ok', titre:'HTTPS présent',
+      expl:"Le transport est chiffré. ⚠️ Mais HTTPS ≠ site honnête : un site de phishing peut aussi avoir un cadenas." });
+  } else {
+    flags.push({ level:'danger', titre:'Protocole inhabituel : ' + u.protocol,
+      expl:"Les QR malveillants utilisent parfois des schémas exotiques (tel:, sms:, intent:, javascript:) pour déclencher des actions sur ton téléphone." });
+  }
+
+  // 2. Raccourcisseur d'URL — "boîte cadeau opaque"
+  if (SHORTENERS.includes(host) || SHORTENERS.some(s => host.endsWith('.' + s))) {
+    flags.push({ level:'warn', titre:'Raccourcisseur d\u2019URL détecté',
+      expl:"L'adresse réelle est cachée derrière " + host + ". Impossible de savoir où ça mène sans suivre la redirection (urlscan.io le fera pour toi)." });
+  }
+
+  // 3. TLD suspect
+  const tld = SUSPICIOUS_TLDS.find(t => host.endsWith(t));
+  if (tld) {
+    flags.push({ level:'warn', titre:'Extension de domaine à risque (' + tld + ')',
+      expl:"Ces extensions sont gratuites ou très bon marché → massivement utilisées pour le phishing jetable." });
+  }
+
+  // 4. Typosquatting — "faux uniforme de policier"
+  //    On compare le domaine "enregistrable" (avant le TLD) au top 20.
+  const labels = host.split('.');
+  const sld = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
+  for (const brand of TOP_DOMAINS) {
+    if (sld === brand) break; // domaine légitime exact → pas de flag
+    const d = levenshtein(sld, brand);
+    if (d > 0 && d <= 2 && Math.abs(sld.length - brand.length) <= 2) {
+      flags.push({ level:'danger', titre:'Typosquatting possible : "' + sld + '" ≈ "' + brand + '"',
+        expl:"Le domaine ressemble à " + brand + " à " + d + " lettre(s) près. Technique classique : paypa1.com, arnazon.com…" });
+      break;
+    }
+    // Marque incluse dans un domaine qui n'est pas le sien :
+    // ex. paypal.secure-login.xyz ou login-paypal.com
+    if (sld !== brand && (host.includes(brand + '-') || host.includes('-' + brand)
+        || (labels.slice(0, -2).join('.').includes(brand)))) {
+      flags.push({ level:'danger', titre:'Marque "' + brand + '" utilisée dans un domaine étranger',
+        expl:"Le vrai propriétaire ici est « " + sld + '.' + labels[labels.length-1] + " », pas " + brand + ". Le nom de la marque sert d'appât." });
+      break;
+    }
+  }
+
+  // 5. Homographe IDN — "jumeaux maléfiques de lettres"
+  //    Lettres cyrilliques/grecques qui IMITENT l'alphabet latin.
+  if (host.startsWith('xn--') || host.includes('.xn--')) {
+    flags.push({ level:'danger', titre:'Domaine Punycode (xn--)',
+      expl:"Le domaine contient des caractères internationaux encodés. C'est la signature des attaques homographes : аpple.com (a cyrillique) ≠ apple.com." });
+  } else if (/[^\x00-\x7F]/.test(host)) {
+    flags.push({ level:'danger', titre:'Caractères non-ASCII dans le domaine',
+      expl:"Des lettres d'un autre alphabet imitent peut-être des lettres latines. À l'œil c'est identique, pour l'ordinateur c'est un autre site." });
+  }
+
+  // 6. Longueur & sous-domaines — "adresse postale à rallonge"
+  if (rawUrl.length > 120) {
+    flags.push({ level:'warn', titre:'URL anormalement longue (' + rawUrl.length + ' caractères)',
+      expl:"Les URLs de phishing sont souvent très longues pour noyer le poisson et cacher le vrai domaine." });
+  }
+  const subCount = labels.length - 2;
+  if (subCount >= 3) {
+    flags.push({ level:'warn', titre:subCount + ' niveaux de sous-domaines',
+      expl:"Ex : secure.login.account.site.com → seul « site.com » compte. Le reste est du décor pour te tromper." });
+  }
+
+  // 7. Bonus : pièges classiques supplémentaires
+  if (u.username || rawUrl.includes('@')) {
+    flags.push({ level:'danger', titre:'Symbole @ dans l\u2019URL',
+      expl:"Tout ce qui est avant le @ est ignoré par le navigateur : https://paypal.com@evil.xyz va sur evil.xyz, pas sur PayPal !" });
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    flags.push({ level:'danger', titre:'Adresse IP au lieu d\u2019un nom de domaine',
+      expl:"Les sites légitimes ont un nom. Une IP brute = souvent un serveur jetable d'attaquant." });
+  }
+  if (u.port && !['','80','443'].includes(u.port)) {
+    flags.push({ level:'warn', titre:'Port inhabituel : ' + u.port,
+      expl:"Le web normal vit sur 80/443. Un autre port peut indiquer un service improvisé." });
+  }
+
+  if (flags.every(f => f.level === 'ok')) {
+    flags.push({ level:'ok', titre:'Aucune alerte locale',
+      expl:"Les vérifications instantanées ne voient rien d'anormal. Attends quand même le verdict des API externes." });
+  }
+  return flags;
+}
+
+/* ============================================================
+   SECTION 6 — VIRUSTOTAL API v3
+   ------------------------------------------------------------
+   Flux : POST /urls (soumettre) → GET /analyses/{id} (rapport).
+   L'API VT ne renvoie pas d'en-têtes CORS → appel direct
+   bloqué par le navigateur. Solution clé en main : le proxy
+   Cloudflare Worker fourni (worker/vt-proxy.js). Si une URL
+   de proxy est configurée dans ⚙️, on passe par elle ;
+   sinon on tente en direct et on explique l'échec.
+   ============================================================ */
+// Construit la base d'URL : proxy si configuré, sinon VT direct
+function vtBase(){
+  const proxy = (localStorage.getItem('qrshield_proxy') || '').replace(/\/+$/, '');
+  return proxy ? proxy + '/vt' : 'https://www.virustotal.com/api/v3';
+}
+
+async function runVirusTotal(url){
+  const key = localStorage.getItem('qrshield_vt_key');
+  const status = $('vtStatus'), out = $('vtResult');
+  out.innerHTML = '';
+  if (!key) { status.textContent = "Clé API non configurée — ouvre ⚙️ pour l'ajouter."; return; }
+
+  status.textContent = 'Soumission à VirusTotal…';
+  status.classList.add('loading');
+
+  try {
+    // Étape 1 : soumettre l'URL
+    const submit = await fetchWithTimeout(vtBase() + '/urls', {
+      method: 'POST',
+      headers: { 'x-apikey': key, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'url=' + encodeURIComponent(url)
+    }, 15000);
+
+    if (submit.status === 401) throw new Error('CLE_INVALIDE');
+    if (submit.status === 429) throw new Error('RATE_LIMIT');
+    if (!submit.ok) throw new Error('HTTP_' + submit.status);
+
+    const { data } = await submit.json();
+    const analysisId = data.id;
+
+    // Étape 2 : poller le rapport (max ~30 s)
+    status.textContent = 'Analyse en cours…';
+    let report = null;
+    for (let i = 0; i < 10; i++) {
+      await sleep(3000);
+      const res = await fetchWithTimeout(
+        vtBase() + '/analyses/' + analysisId,
+        { headers: { 'x-apikey': key } }, 15000);
+      if (res.status === 429) throw new Error('RATE_LIMIT');
+      if (!res.ok) throw new Error('HTTP_' + res.status);
+      const json = await res.json();
+      if (json.data.attributes.status === 'completed') { report = json; break; }
+    }
+    if (!report) throw new Error('TIMEOUT_ANALYSE');
+
+    // Étape 3 : afficher les stats
+    const s = report.data.attributes.stats;
+    status.classList.remove('loading');
+    status.textContent = 'Rapport reçu ✔';
+    out.innerHTML =
+      '<div class="vt-stats">' +
+      vtStat(s.malicious,  'Malveillant', s.malicious  > 0 ? 'var(--danger)' : 'var(--text)') +
+      vtStat(s.suspicious, 'Suspect',     s.suspicious > 0 ? 'var(--warn)'   : 'var(--text)') +
+      vtStat(s.harmless,   'Sain',        'var(--safe)') +
+      vtStat(s.undetected, 'Non testé',   'var(--text-dim)') +
+      '</div>';
+
+    window._verdictState.vt = s;
+    renderVerdict();
+    updateHistoryVerdict();
+
+  } catch (err) {
+    status.classList.remove('loading');
+    status.textContent = vtErrorMessage(err);
+  }
+}
+
+function vtStat(n, label, color){
+  return '<div class="vt-stat"><b style="color:' + color + '">' + (n ?? 0) +
+         '</b><span>' + label + '</span></div>';
+}
+
+function vtErrorMessage(err){
+  const m = String(err.message || err);
+  if (m === 'CLE_INVALIDE')   return '❌ Clé API invalide (401). Vérifie-la dans ⚙️.';
+  if (m === 'RATE_LIMIT')     return '⏳ Quota dépassé (429). Compte gratuit = 4 requêtes/min. Réessaie dans 1 min.';
+  if (m === 'TIMEOUT_ANALYSE')return '⏳ Analyse trop longue. Réessaie dans quelques minutes.';
+  if (err.name === 'AbortError') return '⏳ Délai dépassé (timeout réseau).';
+  // TypeError "Failed to fetch" = très probablement CORS bloqué
+  if (err instanceof TypeError) {
+    return localStorage.getItem('qrshield_proxy')
+      ? '🚧 Le proxy ne répond pas. Vérifie son URL dans ⚙️ et qu\u2019il est bien déployé.'
+      : '🚧 Appel bloqué par le navigateur (CORS). Déploie le proxy fourni (worker/vt-proxy.js) sur Cloudflare et colle son URL dans ⚙️.';
+  }
+  return '❌ Erreur VirusTotal : ' + m;
+}
+
+/* ============================================================
+   SECTION 7 — URLSCAN.IO API
+   ------------------------------------------------------------
+   Flux : POST /scan (visibilité publique) → poll /result/{uuid}
+   → screenshot + domaines contactés + chaîne de redirections.
+   ⚠️ "public" = l'URL scannée sera VISIBLE par tout le monde
+   sur urlscan.io. Ne soumets jamais d'URL avec un token privé.
+   ============================================================ */
+async function runUrlscan(url){
+  const key = localStorage.getItem('qrshield_us_key');
+  const status = $('usStatus'), out = $('usResult');
+  out.innerHTML = '';
+  if (!key) { status.textContent = "Clé API non configurée — ouvre ⚙️ pour l'ajouter."; return; }
+
+  status.textContent = 'Soumission à urlscan.io…';
+  status.classList.add('loading');
+
+  try {
+    // Étape 1 : soumettre le scan
+    const submit = await fetchWithTimeout('https://urlscan.io/api/v1/scan/', {
+      method: 'POST',
+      headers: { 'API-Key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, visibility: 'public' })
+    }, 15000);
+
+    if (submit.status === 401) throw new Error('CLE_INVALIDE');
+    if (submit.status === 429) throw new Error('RATE_LIMIT');
+    if (submit.status === 400) {
+      const j = await submit.json().catch(() => ({}));
+      throw new Error('REJET: ' + (j.message || 'URL refusée par urlscan'));
+    }
+    if (!submit.ok) throw new Error('HTTP_' + submit.status);
+
+    const { uuid } = await submit.json();
+
+    // Étape 2 : poller le résultat (404 tant que pas prêt, ~10-30 s)
+    status.textContent = 'Le site est visité en sandbox… (~20 s)';
+    let result = null;
+    for (let i = 0; i < 15; i++) {
+      await sleep(4000);
+      const res = await fetchWithTimeout(
+        'https://urlscan.io/api/v1/result/' + uuid + '/', {}, 15000);
+      if (res.status === 404) continue;       // pas encore prêt
+      if (!res.ok) throw new Error('HTTP_' + res.status);
+      result = await res.json();
+      break;
+    }
+    if (!result) throw new Error('TIMEOUT_ANALYSE');
+
+    // Étape 3 : afficher screenshot + domaines + verdict urlscan
+    status.classList.remove('loading');
+    status.textContent = 'Scan terminé ✔';
+
+    const shotUrl = 'https://urlscan.io/screenshots/' + uuid + '.png';
+    const domains = (result.lists && result.lists.domains) || [];
+    const finalUrl = result.page ? result.page.url : url;
+    const verdictScore = result.verdicts && result.verdicts.overall
+                       ? result.verdicts.overall.score : 0;
+    const malicious = result.verdicts && result.verdicts.overall
+                    ? result.verdicts.overall.malicious : false;
+
+    let html = '';
+    if (finalUrl !== url) {
+      html += '<p class="api-status" style="margin-top:8px">↪ Redirection finale : ' +
+              '<span style="font-family:var(--mono);color:var(--warn)">' +
+              escapeHtml(finalUrl) + '</span></p>';
+    }
+    html += '<img id="screenshot" src="' + shotUrl + '" alt="Capture du site visité en sandbox" loading="lazy">';
+    if (domains.length) {
+      html += '<p class="api-status" style="margin-top:10px"><b>' + domains.length +
+              ' domaine(s) contacté(s) :</b></p><div class="domain-list">' +
+              domains.slice(0, 25).map(escapeHtml).join('<br>') + '</div>';
+    }
+    out.innerHTML = html;
+
+    window._verdictState.us = { malicious, score: verdictScore, redirected: finalUrl !== url };
+    renderVerdict();
+    updateHistoryVerdict();
+
+  } catch (err) {
+    status.classList.remove('loading');
+    const m = String(err.message || err);
+    if (m === 'CLE_INVALIDE')        status.textContent = '❌ Clé API invalide (401). Vérifie-la dans ⚙️.';
+    else if (m === 'RATE_LIMIT')     status.textContent = '⏳ Quota urlscan dépassé (429). Réessaie plus tard.';
+    else if (m.startsWith('REJET'))  status.textContent = '🚫 ' + m;
+    else if (m === 'TIMEOUT_ANALYSE')status.textContent = '⏳ Le scan met trop de temps. Consulte urlscan.io directement.';
+    else if (err.name === 'AbortError') status.textContent = '⏳ Délai réseau dépassé.';
+    else if (err instanceof TypeError)  status.textContent = '🚧 Appel bloqué (réseau ou CORS).';
+    else status.textContent = '❌ Erreur urlscan : ' + m;
+  }
+}
+
+/* ============================================================
+   SECTION 8 — VERDICT GLOBAL (le feu tricolore)
+   ------------------------------------------------------------
+   Règle simple :
+   - 1 flag local "danger" OU VT malicious ≥ 2 OU urlscan
+     malicious → DANGEREUX
+   - 1 flag "warn" OU VT malicious = 1 / suspicious ≥ 1 → SUSPECT
+   - sinon → SAFE
+   ============================================================ */
+function verdictLevel(){
+  const st = window._verdictState || { local: [] };
+  const localDanger = st.local.some(f => f.level === 'danger');
+  const localWarn   = st.local.some(f => f.level === 'warn');
+  const vt = st.vt, us = st.us;
+
+  if (localDanger) return 'danger';
+  if (vt && vt.malicious >= 2) return 'danger';
+  if (us && us.malicious) return 'danger';
+  if (localWarn) return 'warn';
+  if (vt && (vt.malicious === 1 || vt.suspicious >= 1)) return 'warn';
+  return 'safe';
+}
+
+function renderVerdict(){
+  const lvl = verdictLevel();
+  const v = $('verdict');
+  v.className = lvl;
+  const pending = (!window._verdictState.vt || !window._verdictState.us)
+    ? 'Analyses externes en cours ou non configurées…' : 'Toutes les analyses sont terminées.';
+  if (lvl === 'danger') v.innerHTML = '🔴 DANGEREUX<small>' + pending + ' N\u2019ouvre pas cette URL.</small>';
+  else if (lvl === 'warn') v.innerHTML = '🟠 SUSPECT<small>' + pending + ' Prudence maximale.</small>';
+  else v.innerHTML = '🟢 SAFE<small>' + pending + ' Aucun signal d\u2019alerte détecté.</small>';
+}
+
+function renderFlags(flags){
+  $('flags').innerHTML = flags.map(f =>
+    '<div class="flag f-' + f.level + '"><span class="dot"></span><div>' +
+    '<b>' + escapeHtml(f.titre) + '</b><p>' + escapeHtml(f.expl) + '</p></div></div>'
+  ).join('');
+}
+
+/* ============================================================
+   SECTION 9 — "OUVRIR QUAND MÊME" : double confirmation
+   ------------------------------------------------------------
+   1er clic : le bouton se transforme et demande confirmation.
+   2e clic dans les 5 s : ouverture dans un nouvel onglet,
+   avec noopener (le site ouvert ne peut pas manipuler QRShield).
+   ============================================================ */
+$('openAnyway').addEventListener('click', () => {
+  const btn = $('openAnyway');
+  if (!currentUrl) return;
+  if (!btn.classList.contains('confirm')) {
+    btn.classList.add('confirm');
+    btn.textContent = '⚠️ Tu es sûr·e ? Clique encore pour ouvrir';
+    confirmTimer = setTimeout(resetOpenButton, 5000);
+  } else {
+    clearTimeout(confirmTimer);
+    resetOpenButton();
+    // noopener + noreferrer = isolation de l'onglet ouvert
+    window.open(currentUrl, '_blank', 'noopener,noreferrer');
+  }
+});
+function resetOpenButton(){
+  const btn = $('openAnyway');
+  btn.classList.remove('confirm');
+  btn.textContent = 'Ouvrir quand même cette URL';
+}
+
+/* ============================================================
+   SECTION 10 — HISTORIQUE (10 derniers scans, localStorage)
+   ============================================================ */
+const HIST_KEY = 'qrshield_history';
+
+function saveToHistory(url, verdict){
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  hist.unshift({ url, verdict, date: new Date().toISOString() });
+  localStorage.setItem(HIST_KEY, JSON.stringify(hist.slice(0, 10)));
+  renderHistory();
+}
+
+// Met à jour le verdict du dernier scan après réponse des API
+function updateHistoryVerdict(){
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  if (hist.length && hist[0].url === currentUrl) {
+    hist[0].verdict = verdictLevel();
+    localStorage.setItem(HIST_KEY, JSON.stringify(hist));
+    renderHistory();
+  }
+}
+
+function renderHistory(){
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  const box = $('historyList');
+  if (!hist.length) { box.innerHTML = '<p class="api-status">Aucun scan pour l\u2019instant.</p>'; return; }
+  const labels = { safe:'SAFE', warn:'SUSPECT', danger:'DANGER' };
+  box.innerHTML = hist.map(h =>
+    '<div class="hist-item"><span class="u">' + escapeHtml(h.url.slice(0, 60)) +
+    (h.url.length > 60 ? '…' : '') + '</span>' +
+    '<span class="badge ' + h.verdict + '">' + labels[h.verdict] + '</span></div>'
+  ).join('');
+}
+
+/* ============================================================
+   SECTION 11 — RÉGLAGES (clés API en localStorage)
+   ============================================================ */
+$('openSettings').addEventListener('click', () => {
+  $('vtKey').value = localStorage.getItem('qrshield_vt_key') || '';
+  $('usKey').value = localStorage.getItem('qrshield_us_key') || '';
+  $('proxyUrl').value = localStorage.getItem('qrshield_proxy') || '';
+  $('settingsDialog').showModal();
+});
+$('closeSettings').addEventListener('click', () => $('settingsDialog').close());
+$('saveKeys').addEventListener('click', () => {
+  const vt = $('vtKey').value.trim(), us = $('usKey').value.trim();
+  const px = $('proxyUrl').value.trim();
+  vt ? localStorage.setItem('qrshield_vt_key', vt) : localStorage.removeItem('qrshield_vt_key');
+  us ? localStorage.setItem('qrshield_us_key', us) : localStorage.removeItem('qrshield_us_key');
+  px ? localStorage.setItem('qrshield_proxy', px) : localStorage.removeItem('qrshield_proxy');
+  $('settingsDialog').close();
+  if (currentUrl) { runVirusTotal(currentUrl); runUrlscan(currentUrl); }
+});
+
+/* ============================================================
+   SECTION 12 — Utilitaires
+   ============================================================ */
+function sleep(ms){ return new Promise(r => setTimeout(r, ms)); }
+
+// fetch avec timeout — évite de rester bloqué si l'API ne répond pas
+function fetchWithTimeout(url, opts = {}, ms = 15000){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal })
+    .finally(() => clearTimeout(t));
+}
+
+// Anti-XSS : tout contenu externe passe par ici avant le DOM.
+// (Oui, même dans un outil de sécurité : une URL de QR code est
+// une donnée NON FIABLE qui pourrait contenir du HTML piégé.)
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
+// Affichage de l'historique au chargement
+renderHistory();
+</script>
+</body>
+</html>
