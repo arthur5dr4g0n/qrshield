@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QRShield — Politique de confidentialité</title>
+  <style>
+    body { font-family: sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; color: #1a1a2e; line-height: 1.7; }
+    h1 { color: #5b21b6; }
+    h2 { color: #4c1d95; margin-top: 2rem; }
+    a { color: #7c3aed; }
+    footer { margin-top: 3rem; font-size: 0.85rem; color: #666; }
+  </style>
+</head>
+<body>
+
+<h1>Politique de confidentialité — QRShield</h1>
+<p><em>Dernière mise à jour : 10 juin 2026</em></p>
+
+<p>QRShield est une application web (PWA) qui analyse les QR codes avant de les ouvrir. Cette page explique quelles données sont utilisées et comment.</p>
+
+<h2>1. Caméra</h2>
+<p>L'application utilise votre caméra uniquement pour lire les QR codes. <strong>Les images ne quittent jamais votre appareil.</strong> Aucune photo n'est enregistrée ni envoyée à un serveur.</p>
+
+<h2>2. URLs analysées</h2>
+<p>Quand un QR code est scanné, l'URL qu'il contient peut être envoyée à des services tiers pour vérification :</p>
+<ul>
+  <li><strong>VirusTotal</strong> (<a href="https://www.virustotal.com" target="_blank" rel="noopener">virustotal.com</a>) — pour vérifier si l'URL est connue comme malveillante. Soumission soumise à la <a href="https://docs.virustotal.com/docs/privacy-policy" target="_blank" rel="noopener">politique de confidentialité de VirusTotal</a>.</li>
+  <li><strong>urlscan.io</strong> (<a href="https://urlscan.io" target="_blank" rel="noopener">urlscan.io</a>) — analyse complémentaire. Les URLs soumises peuvent être <strong>visibles publiquement</strong> sur leur site. Ne scannez pas de QR codes contenant des liens privés ou des tokens.</li>
+</ul>
+<p>Ces envois ne se font que si vous avez configuré vos clés API dans les paramètres de l'application.</p>
+
+<h2>3. Clés API</h2>
+<p>Vos clés API VirusTotal et urlscan.io sont stockées <strong>uniquement sur votre appareil</strong> (localStorage). Elles ne sont jamais transmises à nos serveurs.</p>
+
+<h2>4. Proxy CORS</h2>
+<p>Un proxy intermédiaire (Cloudflare Worker) est utilisé pour relayer les appels vers VirusTotal, car ce service ne supporte pas les appels directs depuis un navigateur. Ce proxy ne stocke aucune donnée et ne conserve aucun journal des URLs analysées.</p>
+
+<h2>5. Données collectées</h2>
+<p><strong>Aucune donnée personnelle n'est collectée.</strong> L'application ne crée pas de compte utilisateur, ne suit pas votre activité et n'utilise pas de cookies de traçage.</p>
+
+<h2>6. Contact</h2>
+<p>Pour toute question : <a href="mailto:arthur.5dr4g0n@gmail.com">arthur.5dr4g0n@gmail.com</a></p>
+
+<footer>QRShield — Application open source.</footer>
+
+</body>
+</html>
