@@ -128,15 +128,16 @@ main{ max-width:560px; margin:0 auto; padding:18px; display:flex;
   border-top-color:transparent; border-radius:50%; vertical-align:middle;
   animation:spin .8s linear infinite; }
 @keyframes spin{ to{ transform:rotate(360deg); } }
-.vt-stats{ display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
-.vt-stat{ flex:1; min-width:80px; text-align:center; background:var(--bg);
-  border-radius:10px; padding:10px 6px; border:1px solid var(--surface-2); }
-.vt-stat b{ display:block; font-size:1.5rem; font-family:var(--mono); }
-.vt-stat span{ font-size:.75rem; color:var(--text-dim); }
-#screenshot{ width:100%; border-radius:10px; margin-top:10px;
-  border:1px solid var(--surface-2); }
-.domain-list{ font-family:var(--mono); font-size:.8rem; color:var(--text-dim);
-  margin-top:8px; max-height:140px; overflow:auto; }
+.source-row{ display:flex; align-items:center; gap:12px; padding:10px 0;
+  border-bottom:1px solid var(--surface-2); font-size:.9rem; }
+.source-row:last-child{ border-bottom:none; }
+.source-dot{ flex:0 0 10px; height:10px; border-radius:50%; }
+.source-dot.danger{ background:var(--danger); }
+.source-dot.warn{ background:var(--warn); }
+.source-dot.safe{ background:var(--safe); }
+.source-dot.pending{ background:var(--text-dim); }
+.source-name{ flex:0 0 140px; font-weight:700; }
+.source-detail{ color:var(--text-dim); font-size:.85rem; }
 
 /* --- Historique --- */
 .hist-item{ display:flex; justify-content:space-between; gap:10px;
@@ -200,15 +201,9 @@ dialog input:focus{ outline:2px solid var(--violet); }
     </div>
 
     <div class="card" style="margin-top:18px">
-      <h2>🧪 VirusTotal</h2>
-      <div class="api-status" id="vtStatus">Clé API non configurée — ouvre ⚙️ pour l'ajouter.</div>
-      <div id="vtResult"></div>
-    </div>
-
-    <div class="card" style="margin-top:18px">
-      <h2>📸 urlscan.io</h2>
-      <div class="api-status" id="usStatus">Clé API non configurée — ouvre ⚙️ pour l'ajouter.</div>
-      <div id="usResult"></div>
+      <h2>🔬 Analyse multi-sources</h2>
+      <div class="api-status" id="apiStatus">Configure l'URL du Worker dans ⚙️.</div>
+      <div id="apiResult"></div>
     </div>
 
     <!-- Ouverture manuelle uniquement, double confirmation -->
@@ -231,17 +226,12 @@ dialog input:focus{ outline:2px solid var(--violet); }
     Stockées uniquement dans <b>localStorage</b> de ton navigateur.
     Elles ne quittent jamais ton téléphone (sauf vers les API officielles).
   </p>
-  <label for="vtKey">Clé VirusTotal (API v3)</label>
-  <input id="vtKey" type="password" autocomplete="off" placeholder="64 caractères hexadécimaux">
-  <label for="usKey">Clé urlscan.io</label>
-  <input id="usKey" type="password" autocomplete="off" placeholder="UUID urlscan.io">
-  <label for="proxyUrl">Proxy CORS VirusTotal (optionnel)</label>
+  <label for="proxyUrl">URL du Worker QRShield</label>
   <input id="proxyUrl" type="url" autocomplete="off"
-    placeholder="https://qrshield-proxy.toi.workers.dev">
+    placeholder="https://qrshield-proxy.arthur-5dr4g0n.workers.dev">
   <p class="api-status" style="margin-top:6px">
-    Sans proxy, le navigateur bloque les appels VirusTotal (CORS).
-    Déploie <b>worker/vt-proxy.js</b> sur Cloudflare (gratuit, 5 min)
-    et colle l'URL ici.
+    Le Worker interroge VirusTotal, Google Safe Browsing et URLhaus.
+    Les clés API sont stockées dans Cloudflare (secrets), pas ici.
   </p>
   <div style="display:flex; gap:10px; margin-top:18px">
     <button class="btn btn-primary" id="saveKeys">Enregistrer</button>
@@ -370,13 +360,11 @@ function onQRDecoded(raw){
   const flags = analyzeLocally(currentUrl);
   renderFlags(flags);
 
-  // Verdict provisoire basé sur le local (sera mis à jour par les API)
-  window._verdictState = { local: flags, vt: null, us: null };
+  // Verdict provisoire basé sur le local (sera mis à jour par le Worker)
+  window._verdictState = { local: flags, api: null };
   renderVerdict();
 
-  // 4b + 4c. Analyses distantes en parallèle (si clés présentes)
-  runVirusTotal(currentUrl);
-  runUrlscan(currentUrl);
+  runScan(currentUrl);
 
   // Historique (verdict mis à jour à la fin si les API répondent)
   saveToHistory(currentUrl, verdictLevel());
@@ -531,185 +519,90 @@ function analyzeLocally(rawUrl){
    sinon on tente en direct et on explique l'échec.
    ============================================================ */
 // Construit la base d'URL : proxy si configuré, sinon VT direct
-function vtBase(){
-  const proxy = (localStorage.getItem('qrshield_proxy') || '').replace(/\/+$/, '');
-  return proxy ? proxy + '/vt' : 'https://www.virustotal.com/api/v3';
-}
-
-async function runVirusTotal(url){
-  const key = localStorage.getItem('qrshield_vt_key');
-  const status = $('vtStatus'), out = $('vtResult');
-  out.innerHTML = '';
-  if (!key) { status.textContent = "Clé API non configurée — ouvre ⚙️ pour l'ajouter."; return; }
-
-  status.textContent = 'Soumission à VirusTotal…';
-  status.classList.add('loading');
-
-  try {
-    // Étape 1 : soumettre l'URL
-    const submit = await fetchWithTimeout(vtBase() + '/urls', {
-      method: 'POST',
-      headers: { 'x-apikey': key, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'url=' + encodeURIComponent(url)
-    }, 15000);
-
-    if (submit.status === 401) throw new Error('CLE_INVALIDE');
-    if (submit.status === 429) throw new Error('RATE_LIMIT');
-    if (!submit.ok) throw new Error('HTTP_' + submit.status);
-
-    const { data } = await submit.json();
-    const analysisId = data.id;
-
-    // Étape 2 : poller le rapport (max ~30 s)
-    status.textContent = 'Analyse en cours…';
-    let report = null;
-    for (let i = 0; i < 10; i++) {
-      await sleep(3000);
-      const res = await fetchWithTimeout(
-        vtBase() + '/analyses/' + analysisId,
-        { headers: { 'x-apikey': key } }, 15000);
-      if (res.status === 429) throw new Error('RATE_LIMIT');
-      if (!res.ok) throw new Error('HTTP_' + res.status);
-      const json = await res.json();
-      if (json.data.attributes.status === 'completed') { report = json; break; }
-    }
-    if (!report) throw new Error('TIMEOUT_ANALYSE');
-
-    // Étape 3 : afficher les stats
-    const s = report.data.attributes.stats;
-    status.classList.remove('loading');
-    status.textContent = 'Rapport reçu ✔';
-    out.innerHTML =
-      '<div class="vt-stats">' +
-      vtStat(s.malicious,  'Malveillant', s.malicious  > 0 ? 'var(--danger)' : 'var(--text)') +
-      vtStat(s.suspicious, 'Suspect',     s.suspicious > 0 ? 'var(--warn)'   : 'var(--text)') +
-      vtStat(s.harmless,   'Sain',        'var(--safe)') +
-      vtStat(s.undetected, 'Non testé',   'var(--text-dim)') +
-      '</div>';
-
-    window._verdictState.vt = s;
-    renderVerdict();
-    updateHistoryVerdict();
-
-  } catch (err) {
-    status.classList.remove('loading');
-    status.textContent = vtErrorMessage(err);
-  }
-}
-
-function vtStat(n, label, color){
-  return '<div class="vt-stat"><b style="color:' + color + '">' + (n ?? 0) +
-         '</b><span>' + label + '</span></div>';
-}
-
-function vtErrorMessage(err){
-  const m = String(err.message || err);
-  if (m === 'CLE_INVALIDE')   return '❌ Clé API invalide (401). Vérifie-la dans ⚙️.';
-  if (m === 'RATE_LIMIT')     return '⏳ Quota dépassé (429). Compte gratuit = 4 requêtes/min. Réessaie dans 1 min.';
-  if (m === 'TIMEOUT_ANALYSE')return '⏳ Analyse trop longue. Réessaie dans quelques minutes.';
-  if (err.name === 'AbortError') return '⏳ Délai dépassé (timeout réseau).';
-  // TypeError "Failed to fetch" = très probablement CORS bloqué
-  if (err instanceof TypeError) {
-    return localStorage.getItem('qrshield_proxy')
-      ? '🚧 Le proxy ne répond pas. Vérifie son URL dans ⚙️ et qu\u2019il est bien déployé.'
-      : '🚧 Appel bloqué par le navigateur (CORS). Déploie le proxy fourni (worker/vt-proxy.js) sur Cloudflare et colle son URL dans ⚙️.';
-  }
-  return '❌ Erreur VirusTotal : ' + m;
-}
-
 /* ============================================================
-   SECTION 7 — URLSCAN.IO API
+   SECTION 6 — ANALYSE MULTI-SOURCES (via Cloudflare Worker)
    ------------------------------------------------------------
-   Flux : POST /scan (visibilité publique) → poll /result/{uuid}
-   → screenshot + domaines contactés + chaîne de redirections.
-   ⚠️ "public" = l'URL scannée sera VISIBLE par tout le monde
-   sur urlscan.io. Ne soumets jamais d'URL avec un token privé.
+   Image mentale : un chef d'orchestre. Il envoie l'URL au Worker,
+   qui interroge VT + Safe Browsing + URLhaus côté serveur,
+   puis renvoie un verdict global + le détail par source.
    ============================================================ */
-async function runUrlscan(url){
-  const key = localStorage.getItem('qrshield_us_key');
-  const status = $('usStatus'), out = $('usResult');
+async function runScan(url) {
+  const proxyUrl = (localStorage.getItem('qrshield_proxy') || '').replace(/\/+$/, '');
+  const status = $('apiStatus'), out = $('apiResult');
   out.innerHTML = '';
-  if (!key) { status.textContent = "Clé API non configurée — ouvre ⚙️ pour l'ajouter."; return; }
 
-  status.textContent = 'Soumission à urlscan.io…';
+  if (!proxyUrl) {
+    status.textContent = "Worker non configuré — ouvre ⚙️ et colle son URL.";
+    return;
+  }
+
+  status.textContent = 'Analyse en cours… (jusqu\'à 30 s)';
   status.classList.add('loading');
 
   try {
-    // Étape 1 : soumettre le scan
-    const submit = await fetchWithTimeout('https://urlscan.io/api/v1/scan/', {
+    const res = await fetchWithTimeout(proxyUrl + '/scan', {
       method: 'POST',
-      headers: { 'API-Key': key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url, visibility: 'public' })
-    }, 15000);
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    }, 35000);
 
-    if (submit.status === 401) throw new Error('CLE_INVALIDE');
-    if (submit.status === 429) throw new Error('RATE_LIMIT');
-    if (submit.status === 400) {
-      const j = await submit.json().catch(() => ({}));
-      throw new Error('REJET: ' + (j.message || 'URL refusée par urlscan'));
-    }
-    if (!submit.ok) throw new Error('HTTP_' + submit.status);
+    if (!res.ok) throw new Error('HTTP_' + res.status);
+    const { verdict, sources } = await res.json();
 
-    const { uuid } = await submit.json();
-
-    // Étape 2 : poller le résultat (404 tant que pas prêt, ~10-30 s)
-    status.textContent = 'Le site est visité en sandbox… (~20 s)';
-    let result = null;
-    for (let i = 0; i < 15; i++) {
-      await sleep(4000);
-      const res = await fetchWithTimeout(
-        'https://urlscan.io/api/v1/result/' + uuid + '/', {}, 15000);
-      if (res.status === 404) continue;       // pas encore prêt
-      if (!res.ok) throw new Error('HTTP_' + res.status);
-      result = await res.json();
-      break;
-    }
-    if (!result) throw new Error('TIMEOUT_ANALYSE');
-
-    // Étape 3 : afficher screenshot + domaines + verdict urlscan
     status.classList.remove('loading');
-    status.textContent = 'Scan terminé ✔';
+    status.textContent = 'Analyse terminée ✔';
 
-    const shotUrl = 'https://urlscan.io/screenshots/' + uuid + '.png';
-    const domains = (result.lists && result.lists.domains) || [];
-    const finalUrl = result.page ? result.page.url : url;
-    const verdictScore = result.verdicts && result.verdicts.overall
-                       ? result.verdicts.overall.score : 0;
-    const malicious = result.verdicts && result.verdicts.overall
-                    ? result.verdicts.overall.malicious : false;
-
-    let html = '';
-    if (finalUrl !== url) {
-      html += '<p class="api-status" style="margin-top:8px">↪ Redirection finale : ' +
-              '<span style="font-family:var(--mono);color:var(--warn)">' +
-              escapeHtml(finalUrl) + '</span></p>';
-    }
-    html += '<img id="screenshot" src="' + shotUrl + '" alt="Capture du site visité en sandbox" loading="lazy">';
-    if (domains.length) {
-      html += '<p class="api-status" style="margin-top:10px"><b>' + domains.length +
-              ' domaine(s) contacté(s) :</b></p><div class="domain-list">' +
-              domains.slice(0, 25).map(escapeHtml).join('<br>') + '</div>';
-    }
-    out.innerHTML = html;
-
-    window._verdictState.us = { malicious, score: verdictScore, redirected: finalUrl !== url };
+    window._verdictState.api = { verdict, sources };
+    out.innerHTML = renderSources(sources);
     renderVerdict();
     updateHistoryVerdict();
 
   } catch (err) {
     status.classList.remove('loading');
-    const m = String(err.message || err);
-    if (m === 'CLE_INVALIDE')        status.textContent = '❌ Clé API invalide (401). Vérifie-la dans ⚙️.';
-    else if (m === 'RATE_LIMIT')     status.textContent = '⏳ Quota urlscan dépassé (429). Réessaie plus tard.';
-    else if (m.startsWith('REJET'))  status.textContent = '🚫 ' + m;
-    else if (m === 'TIMEOUT_ANALYSE')status.textContent = '⏳ Le scan met trop de temps. Consulte urlscan.io directement.';
-    else if (err.name === 'AbortError') status.textContent = '⏳ Délai réseau dépassé.';
-    else if (err instanceof TypeError)  status.textContent = '🚧 Appel bloqué (réseau ou CORS).';
-    else status.textContent = '❌ Erreur urlscan : ' + m;
+    if (err.name === 'AbortError') {
+      status.textContent = '⏳ Délai dépassé (35 s). Réessaie dans quelques instants.';
+    } else if (err instanceof TypeError) {
+      status.textContent = '🚧 Worker inaccessible. Vérifie son URL dans ⚙️.';
+    } else {
+      status.textContent = '❌ Erreur : ' + escapeHtml(String(err.message || err));
+    }
   }
 }
 
-/* ============================================================
+function renderSources(sources) {
+  function vtDetail(s) {
+    if (s.error) return { dot: 'pending', text: '⚠ ' + s.error };
+    if (s.malicious > 0) return { dot: 'danger',
+      text: s.malicious + ' moteur(s) malveillant' + (s.suspicious > 0 ? ', ' + s.suspicious + ' suspect' : '') };
+    if (s.suspicious > 0) return { dot: 'warn', text: s.suspicious + ' moteur(s) suspect' };
+    return { dot: 'safe', text: s.harmless + ' sain, ' + s.undetected + ' non testé' };
+  }
+  function gsbDetail(s) {
+    if (s.error) return { dot: 'pending', text: '⚠ ' + s.error };
+    if (s.matched) return { dot: 'danger', text: 'Menace : ' + s.type };
+    return { dot: 'safe', text: 'Aucune correspondance' };
+  }
+  function uhDetail(s) {
+    if (s.error) return { dot: 'pending', text: '⚠ ' + s.error };
+    if (s.listed) return { dot: 'danger',
+      text: 'Signalée : ' + (s.threat || 'malware') + (s.status ? ' (' + s.status + ')' : '') };
+    return { dot: 'safe', text: 'Non répertoriée' };
+  }
+  const rows = [
+    { name: 'VirusTotal',          fn: vtDetail,  data: sources.virustotal },
+    { name: 'Safe Browsing',       fn: gsbDetail, data: sources.safebrowsing },
+    { name: 'URLhaus',             fn: uhDetail,  data: sources.urlhaus },
+  ];
+  return '<div style="margin-top:8px">' + rows.map(r => {
+    const d = r.fn(r.data || { error: 'non disponible' });
+    return '<div class="source-row">' +
+      '<span class="source-dot ' + d.dot + '"></span>' +
+      '<span class="source-name">' + escapeHtml(r.name) + '</span>' +
+      '<span class="source-detail">' + escapeHtml(d.text) + '</span>' +
+      '</div>';
+  }).join('') + '</div>';
+}
+
    SECTION 8 — VERDICT GLOBAL (le feu tricolore)
    ------------------------------------------------------------
    Règle simple :
@@ -722,13 +615,12 @@ function verdictLevel(){
   const st = window._verdictState || { local: [] };
   const localDanger = st.local.some(f => f.level === 'danger');
   const localWarn   = st.local.some(f => f.level === 'warn');
-  const vt = st.vt, us = st.us;
+  const api = st.api;
 
   if (localDanger) return 'danger';
-  if (vt && vt.malicious >= 2) return 'danger';
-  if (us && us.malicious) return 'danger';
+  if (api && (api.verdict === 'danger_confirmed' || api.verdict === 'danger')) return 'danger';
   if (localWarn) return 'warn';
-  if (vt && (vt.malicious === 1 || vt.suspicious >= 1)) return 'warn';
+  if (api && api.verdict === 'suspicious') return 'warn';
   return 'safe';
 }
 
@@ -736,8 +628,8 @@ function renderVerdict(){
   const lvl = verdictLevel();
   const v = $('verdict');
   v.className = lvl;
-  const pending = (!window._verdictState.vt || !window._verdictState.us)
-    ? 'Analyses externes en cours ou non configurées…' : 'Toutes les analyses sont terminées.';
+  const pending = !window._verdictState.api
+    ? 'Analyse multi-sources en cours…' : 'Toutes les analyses sont terminées.';
   if (lvl === 'danger') v.innerHTML = '🔴 DANGEREUX<small>' + pending + ' N\u2019ouvre pas cette URL.</small>';
   else if (lvl === 'warn') v.innerHTML = '🟠 SUSPECT<small>' + pending + ' Prudence maximale.</small>';
   else v.innerHTML = '🟢 SAFE<small>' + pending + ' Aucun signal d\u2019alerte détecté.</small>';
@@ -815,20 +707,15 @@ function renderHistory(){
    SECTION 11 — RÉGLAGES (clés API en localStorage)
    ============================================================ */
 $('openSettings').addEventListener('click', () => {
-  $('vtKey').value = localStorage.getItem('qrshield_vt_key') || '';
-  $('usKey').value = localStorage.getItem('qrshield_us_key') || '';
   $('proxyUrl').value = localStorage.getItem('qrshield_proxy') || '';
   $('settingsDialog').showModal();
 });
 $('closeSettings').addEventListener('click', () => $('settingsDialog').close());
 $('saveKeys').addEventListener('click', () => {
-  const vt = $('vtKey').value.trim(), us = $('usKey').value.trim();
   const px = $('proxyUrl').value.trim();
-  vt ? localStorage.setItem('qrshield_vt_key', vt) : localStorage.removeItem('qrshield_vt_key');
-  us ? localStorage.setItem('qrshield_us_key', us) : localStorage.removeItem('qrshield_us_key');
   px ? localStorage.setItem('qrshield_proxy', px) : localStorage.removeItem('qrshield_proxy');
   $('settingsDialog').close();
-  if (currentUrl) { runVirusTotal(currentUrl); runUrlscan(currentUrl); }
+  if (currentUrl) runScan(currentUrl);
 });
 
 /* ============================================================
