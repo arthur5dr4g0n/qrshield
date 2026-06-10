@@ -509,17 +509,6 @@ function analyzeLocally(rawUrl){
 }
 
 /* ============================================================
-   SECTION 6 — VIRUSTOTAL API v3
-   ------------------------------------------------------------
-   Flux : POST /urls (soumettre) → GET /analyses/{id} (rapport).
-   L'API VT ne renvoie pas d'en-têtes CORS → appel direct
-   bloqué par le navigateur. Solution clé en main : le proxy
-   Cloudflare Worker fourni (worker/vt-proxy.js). Si une URL
-   de proxy est configurée dans ⚙️, on passe par elle ;
-   sinon on tente en direct et on explique l'échec.
-   ============================================================ */
-// Construit la base d'URL : proxy si configuré, sinon VT direct
-/* ============================================================
    SECTION 6 — ANALYSE MULTI-SOURCES (via Cloudflare Worker)
    ------------------------------------------------------------
    Image mentale : un chef d'orchestre. Il envoie l'URL au Worker,
