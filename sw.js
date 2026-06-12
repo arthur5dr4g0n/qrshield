@@ -9,7 +9,7 @@
    - Appels API (VirusTotal, urlscan) → réseau direct, jamais
      mis en cache (les rapports doivent être frais)
    ============================================================ */
-const CACHE = 'qrshield-v3';
+const CACHE = 'qrshield-v4';
 
 const SHELL = [
   './',

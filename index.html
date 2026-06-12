@@ -307,6 +307,37 @@ dialog input:focus{ outline:2px solid var(--accent); border-color:var(--accent);
 .hidden{ display:none !important; }
 :focus-visible{ outline:3px solid var(--accent); outline-offset:2px; }
 @media (prefers-reduced-motion: reduce){ *{ animation:none !important; transition:none !important; } }
+
+/* ============================================================
+   RESPONSIVE — petits écrans (téléphones)
+   ------------------------------------------------------------
+   Image mentale : sur un petit bureau, on rapproche les outils
+   et on réduit un peu tout pour que tout reste à portée de main
+   sans déborder. La logique ne change pas, juste l'espacement.
+   ============================================================ */
+@media (max-width:560px){
+  html,body{ font-size:16px; }
+  header{ padding:11px 14px; }
+  .brand .name{ font-size:1.08rem; }
+  .brand .mark{ width:30px; height:30px; }
+  .brand .mark .ic{ width:18px; height:18px; }
+  main{ padding:14px 14px 32px; gap:13px; }
+  .card{ padding:14px 14px; }
+  /* La caméra carrée ne doit pas manger tout l'écran : on plafonne
+     sa hauteur pour garder le verdict visible juste en dessous. */
+  #cameraBox{ max-height:min(72vh,420px); }
+  .viewfinder{ inset:13%; }
+  #verdict{ gap:13px; padding:16px 14px; }
+  #verdict .vmark{ width:42px; height:42px; }
+  #verdict .vlabel{ font-size:1.1rem; }
+  .btn{ padding:14px 14px; min-height:50px; font-size:1rem; }
+}
+@media (max-width:380px){
+  html,body{ font-size:15px; }
+  .brand .tag{ display:none; }
+  main{ padding:12px 11px 28px; }
+  .viewfinder span{ width:22px; height:22px; }
+}
 </style>
 </head>
 <body>
